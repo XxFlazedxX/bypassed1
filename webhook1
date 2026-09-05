@@ -1,0 +1,643 @@
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+local player = game.Players.LocalPlayer
+
+local ALLOWED_USERS = {"ScorpionSerz", "DollSerz"}
+
+if not table.find(ALLOWED_USERS, player.Name) then
+    return
+end
+
+UserInputService.TouchTapInWorld:Connect(function() end)
+
+local isEaseInActive = false
+local isSmoothPullActive = false
+local grappleKillEnabled = false
+local boostsEnabled = false
+local lastGuiPosition = UDim2.new(0,10,0,10)
+
+local previousCollisions = {}
+local smoothThrowDistance = 400
+
+local easeInWinchSettings = {
+    on = {Speed = 790000, Responsiveness = 20000, Target = 5}
+}
+
+local function getMainRope()
+    local ropesFolder = workspace:FindFirstChild("Ropes")
+    local userRopeFolder = ropesFolder and ropesFolder:FindFirstChild(player.Name)
+    return userRopeFolder and userRopeFolder:FindFirstChild("mainConnectionRope")
+end
+
+local function toggleKill()
+    grappleKillEnabled = not grappleKillEnabled
+    local character = player.Character or player.CharacterAdded:Wait()
+
+    if not grappleKillEnabled then
+        for part, original in pairs(previousCollisions) do
+            if part and part:IsA("BasePart") then
+                part.CanCollide = original.CanCollide
+                part.CanTouch = original.CanTouch
+            end
+        end
+        previousCollisions = {}
+    else
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and not previousCollisions[part] then
+                previousCollisions[part] = {CanCollide=part.CanCollide, CanTouch=part.CanTouch}
+                part.CanCollide=false
+                part.CanTouch=false
+            end
+        end
+    end
+
+    local damagePart = workspace:FindFirstChild("Pit") and workspace.Pit:FindFirstChild("Damage")
+    if damagePart then
+        if grappleKillEnabled then
+            damagePart.CFrame = character:WaitForChild("HumanoidRootPart").CFrame
+            damagePart.Size = Vector3.new(9999,9999,9999)
+        else
+            damagePart.CFrame = CFrame.new(0,-15.75,0)
+            damagePart.Size = Vector3.new(3.5,33,33)
+        end
+    end
+
+    local ragdoll = character:FindFirstChild("ragdollValue")
+    if ragdoll then ragdoll:Destroy() end
+end
+
+local function toggleBoosts()
+    boostsEnabled = not boostsEnabled
+    local character = player.Character or player.CharacterAdded:Wait()
+    local root = character:WaitForChild("HumanoidRootPart")
+
+    local jumpBoost = workspace:FindFirstChild("Map") and workspace.Map.Cool.Boosts:FindFirstChild("Jump")
+    local speedBoost = workspace:FindFirstChild("Map") and workspace.Map.Cool.Boosts:FindFirstChild("Speed")
+
+    if jumpBoost and jumpBoost:FindFirstChild("touchDetector") then
+        jumpBoost.touchDetector.CFrame = root.CFrame
+        jumpBoost.touchDetector.Size = boostsEnabled and Vector3.new(9999,9999,9999) or Vector3.new(1,1,1)
+    end
+
+    if speedBoost and speedBoost:FindFirstChild("touchDetector") then
+        speedBoost.touchDetector.CFrame = root.CFrame
+        speedBoost.touchDetector.Size = boostsEnabled and Vector3.new(9999,9999,9999) or Vector3.new(1,1,1)
+    end
+end
+
+local adminScripts = {
+    {
+        name = "🎀 anti",
+        code = [[
+            local RunService = game:GetService("RunService")
+            local player = game.Players.LocalPlayer
+            local antiGrappleEnabled = false
+            local antiGrappleConnection = nil
+            local hookHitboxes = {}
+            local TELEPORT_DISTANCE = 8
+
+            local function createHitbox(hook)
+                local hitbox = Instance.new("Part")
+                hitbox.Size = Vector3.new(4, 4, 130)
+                hitbox.Anchored = true
+                hitbox.CanCollide = false
+                hitbox.CanTouch = false
+                hitbox.Transparency = 0.8
+                hitbox.Material = Enum.Material.ForceField
+                hitbox.Color = Color3.new(1, 0.75, 0.8)
+                hitbox.Name = "LocalGrappleHitbox"
+                hitbox.Parent = workspace
+                hookHitboxes[hook] = hitbox
+            end
+
+            local function removeHitbox(hook)
+                if hookHitboxes[hook] then
+                    hookHitboxes[hook]:Destroy()
+                    hookHitboxes[hook] = nil
+                end
+            end
+
+            local function updateHitboxes()
+                local ropesFolder = workspace:FindFirstChild("Ropes")
+                local existingHooks = {}
+
+                if ropesFolder and ropesFolder:IsA("Folder") then
+                    for _, playerFolder in pairs(ropesFolder:GetChildren()) do
+                        if playerFolder:IsA("Folder") and playerFolder.Name ~= player.Name then
+                            for _, hook in pairs(playerFolder:GetChildren()) do
+                                if hook:IsA("BasePart") and hook.Name == "Hook" then
+                                    existingHooks[hook] = true
+                                    if not hookHitboxes[hook] then
+                                        createHitbox(hook)
+                                    end
+                                    hookHitboxes[hook].CFrame = hook.CFrame * CFrame.new(0, 0, -75)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                for hook in pairs(hookHitboxes) do
+                    if not existingHooks[hook] or not hook.Parent then
+                        removeHitbox(hook)
+                    end
+                end
+            end
+
+            local function isPointInPart(part, point)
+                local relative = part.CFrame:PointToObjectSpace(point)
+                local size = part.Size / 2
+                return math.abs(relative.X) <= size.X
+                    and math.abs(relative.Y) <= size.Y
+                    and math.abs(relative.Z) <= size.Z
+            end
+
+            local function isSafePosition(position)
+                for _, hitbox in pairs(hookHitboxes) do
+                    if isPointInPart(hitbox, position) then
+                        return false
+                    end
+                end
+                return true
+            end
+
+            local function getSafeTeleportPosition(currentPosition)
+                local character = player.Character
+                if not character then
+                    return currentPosition
+                end
+
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                if not hrp then
+                    return currentPosition
+                end
+
+                for _ = 1, 10 do
+                    local angle = math.random() * 2 * math.pi
+                    local direction = Vector3.new(math.cos(angle), 0, math.sin(angle)).Unit
+                    local offset = direction * TELEPORT_DISTANCE
+                    local newPos = hrp.Position + offset
+
+                    if isSafePosition(newPos) then
+                        local params = RaycastParams.new()
+                        params.FilterType = Enum.RaycastFilterType.Exclude
+                        params.FilterDescendantsInstances = {character}
+
+                        local result = workspace:Raycast(newPos + Vector3.new(0, 20, 0), Vector3.new(0, -100, 0), params)
+                        if result and result.Instance and result.Instance.CanCollide then
+                            local finalPos = result.Position + Vector3.new(0, 3, 0)
+
+                            if finalPos.Y <= hrp.Position.Y + 12 then
+                                return finalPos
+                            end
+                        end
+                    end
+                end
+                return hrp.Position
+            end
+
+            local function onAntiGrappleHeartbeat()
+                local character = player.Character
+                if not character then return end
+
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+
+                updateHitboxes()
+
+                for _, hitbox in pairs(hookHitboxes) do
+                    if isPointInPart(hitbox, hrp.Position) then
+                        local newPos = getSafeTeleportPosition(hrp.Position)
+                        if (newPos - hrp.Position).Magnitude > 1 then
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            character:MoveTo(newPos)
+                        end
+                        return
+                    end
+                end
+            end
+
+            if not _G.antiGrapple then
+                _G.antiGrapple = {enabled = false, connection = nil}
+            end
+
+            _G.antiGrapple.enabled = not _G.antiGrapple.enabled
+
+            if _G.antiGrapple.enabled then
+                if _G.antiGrapple.connection then
+                    _G.antiGrapple.connection:Disconnect()
+                end
+                _G.antiGrapple.connection = RunService.Heartbeat:Connect(onAntiGrappleHeartbeat)
+            else
+                for _, hitbox in pairs(hookHitboxes) do 
+                    hitbox:Destroy() 
+                end
+                hookHitboxes = {}
+                if _G.antiGrapple.connection then
+                    _G.antiGrapple.connection:Disconnect()
+                    _G.antiGrapple.connection = nil
+                end
+            end
+        ]]
+    },
+    {
+        name = "✨ Nameless Admin",
+        code = [[loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-Nameless-Admin-23304"))()]]
+    },
+    {
+        name = "🌟 Ragdoll Engine",
+        code = [[loadstring(game:HttpGet("https://rawscripts.net/raw/Ragdoll-Engine-BEST-SCRIPT-WORKING-SystemBroken-7544"))()]]
+    },
+    {
+        name = "🎯 Aimbot",
+        code = [[]]
+    }
+}
+
+local function createGui()
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "RopeGui"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.Parent = player:WaitForChild("PlayerGui")
+
+    local window = Instance.new("Frame")
+    window.Size = UDim2.new(0,160,0,140)
+    window.Position = lastGuiPosition
+    window.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
+    window.BackgroundTransparency = 0.15
+    window.Active = true
+    window.Draggable = true
+    window.Parent = gui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0,16)
+    corner.Parent = window
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 3
+    stroke.Color = Color3.fromRGB(255, 105, 180)
+    stroke.Transparency = 0.2
+    stroke.Parent = window
+    
+    local gradient = Instance.new("UIGradient")
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 182, 193)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255))
+    })
+    gradient.Parent = window
+
+    local bowDecoration = Instance.new("TextLabel")
+    bowDecoration.Size = UDim2.new(0, 20, 0, 20)
+    bowDecoration.Position = UDim2.new(1, -25, 0, 5)
+    bowDecoration.BackgroundTransparency = 1
+    bowDecoration.Text = "🎀"
+    bowDecoration.TextColor3 = Color3.fromRGB(255, 105, 180)
+    bowDecoration.TextSize = 18
+    bowDecoration.Font = Enum.Font.GothamBold
+    bowDecoration.Parent = window
+    
+    local function createButton(size,pos,text)
+
+        local btn = Instance.new("TextButton")
+        btn.Size = size
+        btn.Position = pos
+        btn.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+        btn.BackgroundTransparency = 0.2
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 12
+        btn.Text = text
+        btn.BorderSizePixel = 0
+        btn.AutoButtonColor = false
+        btn.Parent = window
+        
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0,12)
+        btnCorner.Parent = btn
+        
+        local btnStroke = Instance.new("UIStroke")
+        btnStroke.Thickness = 2
+        btnStroke.Color = Color3.fromRGB(255, 0, 0)
+        btnStroke.Transparency = 0.3
+        btnStroke.Parent = btn
+
+        btn.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                btn.BackgroundTransparency = 0.1
+                btn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+            end
+        end)
+
+        btn.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                btn.BackgroundTransparency = 0.2
+                btn.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+            end
+        end)
+
+        return btn
+    end
+
+    local easeButton = createButton(
+        UDim2.new(0,145,0,30),
+        UDim2.new(0.5,-72.5,0,10),
+        "EaseIn: Off"
+    )
+
+    local smoothButton = createButton(
+        UDim2.new(0,145,0,30),
+        UDim2.new(0.5,-72.5,0,45),
+        "Smooth Pull: Off"
+    )
+
+    local killButton = createButton(
+        UDim2.new(0,70,0,30),
+        UDim2.new(0.5,-72.5,0,80),
+        "Kill: Off"
+    )
+
+    local boostsButton = createButton(
+        UDim2.new(0,70,0,30),
+        UDim2.new(0.5,2.5,0,80),
+        "Boosts: Off"
+    )
+
+    local adminToggle = Instance.new("TextButton")
+    adminToggle.Size = UDim2.new(0, 28, 0, 28)
+    adminToggle.Position = UDim2.new(0, 5, 1, -33)
+    adminToggle.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+    adminToggle.BackgroundTransparency = 0.15
+    adminToggle.Text = "⚙️"
+    adminToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    adminToggle.TextSize = 14
+    adminToggle.Font = Enum.Font.GothamBold
+    adminToggle.BorderSizePixel = 0
+    adminToggle.Parent = window
+    
+    local toggleCorner = Instance.new("UICorner")
+    toggleCorner.CornerRadius = UDim.new(1, 0)
+    toggleCorner.Parent = adminToggle
+    
+    local toggleStroke = Instance.new("UIStroke")
+    toggleStroke.Thickness = 2
+    toggleStroke.Color = Color3.fromRGB(255, 0, 0)
+    toggleStroke.Transparency = 0.3
+    toggleStroke.Parent = adminToggle
+    
+    adminToggle.MouseEnter:Connect(function()
+        adminToggle.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+        adminToggle.BackgroundTransparency = 0.05
+    end)
+    
+    adminToggle.MouseLeave:Connect(function()
+        adminToggle.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+        adminToggle.BackgroundTransparency = 0.15
+    end)
+
+    local adminPanel = Instance.new("Frame")
+    adminPanel.Name = "AdminPanel"
+    adminPanel.Size = UDim2.new(0, 280, 0, 380)
+    adminPanel.Position = UDim2.new(0.5, -140, 0.5, -190)
+    adminPanel.BackgroundColor3 = Color3.fromRGB(255, 182, 193)
+    adminPanel.BackgroundTransparency = 0.08
+    adminPanel.Active = true
+    adminPanel.Draggable = true
+    adminPanel.Visible = false
+    adminPanel.Parent = gui
+    
+    local panelCorner = Instance.new("UICorner")
+    panelCorner.CornerRadius = UDim.new(0, 20)
+    panelCorner.Parent = adminPanel
+    
+    local panelStroke = Instance.new("UIStroke")
+    panelStroke.Thickness = 3
+    panelStroke.Color = Color3.fromRGB(255, 0, 0)
+    panelStroke.Transparency = 0.2
+    panelStroke.Parent = adminPanel
+    
+    local panelGradient = Instance.new("UIGradient")
+    panelGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 182, 193)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255))
+    })
+    panelGradient.Parent = adminPanel
+    
+    local titleBar = Instance.new("Frame")
+    titleBar.Size = UDim2.new(1, 0, 0, 40)
+    titleBar.BackgroundTransparency = 1
+    titleBar.Parent = adminPanel
+    
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Size = UDim2.new(1, -50, 1, 0)
+    titleLabel.Position = UDim2.new(0, 15, 0, 0)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Text = "🎀 Interface Menu"
+    titleLabel.TextColor3 = Color3.fromRGB(255, 105, 180)
+    titleLabel.TextSize = 18
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.TextYAlignment = Enum.TextYAlignment.Center
+    titleLabel.Parent = titleBar
+    
+    local closePanelBtn = Instance.new("TextButton")
+    closePanelBtn.Size = UDim2.new(0, 35, 0, 35)
+    closePanelBtn.Position = UDim2.new(1, -40, 0, 2)
+    closePanelBtn.BackgroundTransparency = 1
+    closePanelBtn.Text = "✕"
+    closePanelBtn.TextColor3 = Color3.fromRGB(255, 105, 180)
+    closePanelBtn.TextSize = 20
+    closePanelBtn.Font = Enum.Font.GothamBold
+    closePanelBtn.Parent = titleBar
+    closePanelBtn.MouseButton1Click:Connect(function()
+        adminPanel.Visible = false
+    end)
+    
+    local scriptScroll = Instance.new("ScrollingFrame")
+    scriptScroll.Size = UDim2.new(1, -20, 1, -55)
+    scriptScroll.Position = UDim2.new(0, 10, 0, 45)
+    scriptScroll.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    scriptScroll.BackgroundTransparency = 0.3
+    scriptScroll.BorderSizePixel = 0
+    scriptScroll.ScrollBarThickness = 4
+    scriptScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scriptScroll.Parent = adminPanel
+    
+    local scrollCorner = Instance.new("UICorner")
+    scrollCorner.CornerRadius = UDim.new(0, 10)
+    scrollCorner.Parent = scriptScroll
+    
+    local yOffset = 10
+    local buttonHeight = 40
+    local buttonSpacing = 8
+    
+    for i, scriptData in ipairs(adminScripts) do
+        local scriptBtn = Instance.new("TextButton")
+        scriptBtn.Size = UDim2.new(1, -12, 0, buttonHeight)
+        scriptBtn.Position = UDim2.new(0, 6, 0, yOffset)
+        scriptBtn.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+        scriptBtn.BackgroundTransparency = 0.15
+        scriptBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        scriptBtn.TextSize = 14
+        scriptBtn.Font = Enum.Font.GothamSemibold
+        scriptBtn.Text = scriptData.name
+        scriptBtn.BorderSizePixel = 0
+        scriptBtn.Parent = scriptScroll
+        
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 10)
+        btnCorner.Parent = scriptBtn
+        
+        local btnStroke = Instance.new("UIStroke")
+        btnStroke.Thickness = 2
+        btnStroke.Color = Color3.fromRGB(255, 0, 0)
+        btnStroke.Transparency = 0.3
+        btnStroke.Parent = scriptBtn
+        
+        scriptBtn.MouseEnter:Connect(function()
+            scriptBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+            scriptBtn.BackgroundTransparency = 0.1
+        end)
+        
+        scriptBtn.MouseLeave:Connect(function()
+            scriptBtn.BackgroundColor3 = Color3.fromRGB(255, 105, 180)
+            scriptBtn.BackgroundTransparency = 0.15
+        end)
+        
+        scriptBtn.MouseButton1Click:Connect(function()
+            pcall(function()
+                local execFunc = loadstring(scriptData.code)
+                if execFunc then
+                    execFunc()
+                end
+            end)
+        end)
+        
+        yOffset = yOffset + buttonHeight + buttonSpacing
+    end
+    
+    scriptScroll.CanvasSize = UDim2.new(0, 0, 0, yOffset + 10)
+    
+    adminToggle.MouseButton1Click:Connect(function()
+        adminPanel.Visible = not adminPanel.Visible
+    end)
+
+    local movingEmoji = Instance.new("TextLabel")
+    movingEmoji.Size = UDim2.new(0,25,0,25)
+    movingEmoji.Position = UDim2.new(0,5,0,5)
+    movingEmoji.BackgroundTransparency = 1
+    movingEmoji.Text = "🎀"
+    movingEmoji.TextColor3 = Color3.fromRGB(255, 105, 180)
+    movingEmoji.TextSize = 20
+    movingEmoji.Font = Enum.Font.GothamBold
+    movingEmoji.ZIndex = 10 
+    movingEmoji.Parent = window
+
+    local moveDirectionX = 1
+    local moveDirectionY = 1
+    local moveSpeed = 1.2
+    local moveX = 10
+    local moveY = 10
+    local boundsX = window.Size.X.Offset - 35
+    local boundsY = window.Size.Y.Offset - 35
+
+    RunService.RenderStepped:Connect(function()
+        if window and movingEmoji and window.Parent then
+            moveX = moveX + (moveSpeed * moveDirectionX)
+            moveY = moveY + (moveSpeed * moveDirectionY)
+            
+            if moveX >= boundsX then
+                moveX = boundsX
+                moveDirectionX = -1
+            elseif moveX <= 5 then
+                moveX = 5
+                moveDirectionX = 1
+            end
+            
+            if moveY >= boundsY then
+                moveY = boundsY
+                moveDirectionY = -1
+            elseif moveY <= 5 then
+                moveY = 5
+                moveDirectionY = 1
+            end
+            
+            movingEmoji.Position = UDim2.new(0, moveX, 0, moveY)
+        end
+    end)
+
+    local function setGlow(btn, state, color)
+        if not btn:FindFirstChild("Glow") then
+            local g = Instance.new("UIStroke")
+            g.Name = "Glow"
+            g.Thickness = 3
+            g.Parent = btn
+        end
+        btn.Glow.Color = color
+        btn.Glow.Transparency = state and 0.3 or 1
+    end
+
+    easeButton.Activated:Connect(function()
+        isEaseInActive = not isEaseInActive
+        easeButton.Text = isEaseInActive and "EaseIn: On" or "EaseIn: Off"
+        setGlow(easeButton, isEaseInActive, Color3.fromRGB(255, 105, 180))
+    end)
+
+    smoothButton.Activated:Connect(function()
+        isSmoothPullActive = not isSmoothPullActive
+        smoothButton.Text = isSmoothPullActive and "Smooth Pull: On" or "Smooth Pull: Off"
+        setGlow(smoothButton, isSmoothPullActive, Color3.fromRGB(255, 105, 180))
+    end)
+
+    killButton.Activated:Connect(function()
+        toggleKill()
+        killButton.Text = grappleKillEnabled and "Kill: On" or "Kill: Off"
+        setGlow(killButton, grappleKillEnabled, Color3.fromRGB(255, 0, 0))
+    end)
+
+    boostsButton.Activated:Connect(function()
+        toggleBoosts()
+        boostsButton.Text = boostsEnabled and "Boosts: On" or "Boosts: Off"
+        setGlow(boostsButton, boostsEnabled, Color3.fromRGB(255, 105, 180))
+    end)
+
+    window:GetPropertyChangedSignal("Position"):Connect(function()
+        lastGuiPosition = window.Position
+    end)
+
+end
+
+StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList,true)
+createGui()
+
+RunService.RenderStepped:Connect(function()
+
+    local rope = getMainRope()
+    if not rope then return end
+
+    local smoothFactor = 0.45
+
+    if isSmoothPullActive then
+
+        rope.WinchEnabled = false
+        local target = 5
+        rope.Length = rope.Length + (target - rope.Length) * smoothFactor
+
+    elseif isEaseInActive then
+
+        rope.WinchEnabled = true
+        rope.WinchSpeed = easeInWinchSettings.on.Speed
+        rope.WinchResponsiveness = easeInWinchSettings.on.Responsiveness
+        rope.WinchTarget = easeInWinchSettings.on.Target
+
+    else
+
+        rope.WinchEnabled = false
+        local target = rope.Length + smoothThrowDistance
+        rope.Length = rope.Length + (target - rope.Length) * smoothFactor
+
+    end
+
+end)
